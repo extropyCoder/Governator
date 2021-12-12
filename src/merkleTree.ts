@@ -29,8 +29,8 @@ export class MerkleTree<T> {
     }
     this.refreshNeeded = false;
   }
-  serialiseTree() {
-    JSON.stringify(this.data);
+  serialiseTree() : string {
+    return JSON.stringify(this.data);
   }
 }
 
