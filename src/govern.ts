@@ -1,4 +1,5 @@
 import {
+  Bool,
   CircuitValue,
   Field,
   PrivateKey,
@@ -13,21 +14,20 @@ import {
   isReady,
   shutdown,
   prop,
+  Poseidon,
+  Circuit,
+  Signature,
 } from 'snarkyjs';
 import {MerkleTree} from "./merkleTree"; 
 
-import { create, CID } from 'ipfs-http-client';
+import {create, CID } from 'ipfs-http-client';
 
 type voteDetails =  {
   threshold : number,
   yesVotes  : number,
   noVotes : number,
 }
-type token =  {
-  owner : PublicKey,
-  threshold : number,
-  meta : string,
-}
+
 
 
 // Snapp to allow governance 
@@ -42,35 +42,50 @@ class Govern extends SmartContract {
   nullifierTree : MerkleTree<Field>;
 
 
-  constructor(admin: PublicKey, proposalNumber: UInt64, meta: Field) {
+  constructor(admin: PublicKey) {
     super(admin);
 
     this.admin = State.init(admin);
     this.votes = State.init(Field.zero);
     this.IPFSRoot1 = State.init(Field.zero);
     this.IPFSRoot2 = State.init(Field.zero);
-    this.voteDetails = {threshold : 0,yesVotes:0,noVotes: 0};
+    this.voteDetails = {threshold : 0,yesVotes:0,noVotes: 0 };
     let emptyData : Field[]  = [Field.zero];
-    this.nullifierTree = this.createMerkleTree(emptyData );
+    this.nullifierTree = this.createMerkleTree(emptyData);
     }
 
-  @method async vote() {
-    // first check that user hasn't voted, for this we check for a nullifier in the merkle tree
+  @method async vote(voter: PublicKey, signature : Signature, vote : Field, cid : CID) {
+    // first check that voter address belongs to the originator of the transaction
+    signature.verify(voter, [vote]).assertEquals(true);
+    // now check that user hasn't voted, for this we check for a nullifier in the merkle tree
+    const hashOfAccount  = Poseidon.hash(voter.toFields());
 
-
-
-    console.log("voted");
+    const exists = this.nullifierTree.leafExists(hashOfAccount)
+    // if they have alreaady voted then throw error
+    exists.assertEquals(false);
+      
+    Circuit.asProver(() => {
+      console.log(hashOfAccount.toString());
+    })
+    // we add the hash of the account to the nullifier tree to indicate that this person voted
+    this.updateMerkleTree([hashOfAccount]);
+    // now update the vote details
+      // load the vote details
+      this.loadFromIPFS(cid);
+    switch (vote) {
+      // votes no
+      case  Field.zero:
+        this.voteDetails.noVotes ++;
+      break;
+      // votes yes
+      case  Field.one:
+        this.voteDetails.yesVotes ++;
+        break;
+    }
+    // now store the vote details back on IPFS
   }
   
 
-
-    // range(n: number): Array<number> {
-    //   let res = [];
-    //   for (let i = 0; i < n; ++i) {
-    //     res.push(i);
-    //   }
-    //   return res;
-    // }
 
     @method async closeVote() {
     }
@@ -82,11 +97,26 @@ class Govern extends SmartContract {
     }
     
     createMerkleTree(data : Array<Field>) : MerkleTree<Field> {
-      return new MerkleTree(data);
+      return new MerkleTree(data.length);
     }
 
-    loadFromIPFS() : voteDetails {
+    async updateMerkleTree(data : Field[]){
+      this.nullifierTree.addLeaf(data);
+      await this.storeInIPFS(this.nullifierTree);
+    }
 
+    async storeInIPFS(data : MerkleTree<Field>)  { 
+      const ipfs = create({ host: '127.0.0.1', port: 5002 });
+      let res = await ipfs.add(Buffer.from(JSON.stringify(data)));
+      return res.cid;
+
+    }
+
+    async loadFromIPFS(cid : CID) {
+      const ipfs = create({ host: '127.0.0.1', port: 5002 });
+      for await (const file of ipfs.cat(cid)) {
+        this.voteDetails = JSON.parse(file.toString());
+      }
     }
 
     checkForNullifier(voterAccount :PublicKey ) : boolean {
@@ -95,95 +125,28 @@ class Govern extends SmartContract {
 
   }
 
-
-
-
 export async function run() {
   await isReady;
 
   const Local = Mina.LocalBlockchain();
   Mina.setActiveInstance(Local);
   const account1 = Local.testAccounts[0].privateKey;
-  const account2 = Local.testAccounts[1].privateKey;
 
   const adminPrivkey = PrivateKey.random();
   const adminPubkey = adminPrivkey.toPublicKey();
 
   let snappInstance: Govern;
-  //const initSnappState = new Field(3);
-
-  //upload to IPFS
-  const ipfs = create({ host: '127.0.0.1', port: 5002 });
-  let res = await ipfs.add(Buffer.from(JSON.stringify(dataToUpload)));
-  // workaround to store it in a field element
-  let rawCID = res.cid;
-
-  let stringCID = rawCID.toString();
-  console.log('CID: ', stringCID);
-
-  let whitelistCID1 = rawCID.bytes;
-  const view = new DataView(whitelistCID1.buffer);
-  let uintOfCID = view.getUint32(0);
-  console.log('CID as decimal ', uintOfCID);
-
-  //tx param
-  Poseidon.hash([Field(uintOfCID)])
-
-
-  // smart contract below
-  const view = new DataView(cid.bytes.buffer);
-  let uintOfCID = view.getUint32(0);
-  Poseidon.hash([Field(uintOfCID)])
-    .equals(whiteListCID)
-    .assertEquals(true);
-
-    let whiteList = [];
-    const ipfs = create({ host: '127.0.0.1', port: 5002 });
-    for await (const file of ipfs.cat(cid)) {
-      whiteList = JSON.parse(file.toString());
-    }
-  //
-  // Deploys the snapp
+ 
+   // Deploys the snapp
   await Mina.transaction(account1, async () => {
-    // account2 sends 1000000000 to the new snapp account
     const proposal = UInt64.fromNumber(10);
-   // const admin = await Party.createSigned(account1);
-   // p.balance.subInPlace(amount);
-
-    snappInstance = new Govern(adminPubkey,  proposal);
+    const admin = await Party.createSigned(account1);
+    snappInstance = new Govern(adminPubkey);
   })
     .send()
     .wait();
-
-  // Update the snapp
-  await Mina.transaction(account1, async () => {
-
-    // const fields = [];
-    // fields[0] = new Field(3);
-    // fields[1] = new Field(4);
-    // await snappInstance.update(snappPubkey,snappPrivkey,snappPubkey,fields);
-  })
-    .send()
-    .wait();
-
-  //const a = await Mina.getAccount(snappPubkey);
-
-  console.log('Govern');
-  //console.log('final state value', a.snapp.appState[0].toString());
 }
 
 run();
 shutdown();
 
-// class TreeElements extends CircuitValue {
-//   @prop publicKey: PublicKey;
-//   @prop amount: UInt64;
-//   constructor(publicKey: PublicKey, amount: UInt64) {
-//     super();
-//     this.publicKey = publicKey;
-//     this.amount = amount;
-//   }
-//    xyz(): [TreeElements, Field][] {
-//     return this;
-//   }
-// }

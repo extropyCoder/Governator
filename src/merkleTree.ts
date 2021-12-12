@@ -1,29 +1,37 @@
+import {Bool} from 'snarkyjs';
 export class MerkleTree<T> {
+  size : number;  
+  data: Array<T>;
+  refreshNeeded: boolean;
 
-    data: Array<T>;
+  constructor(size : number) {
+    this.size = size;
+    this.refreshNeeded = true;
+    this.data = Array<T>(size);
+  }
 
+  addLeaf<T>(leaf: T): T {
+    return leaf;
+  }
 
+  leafExists<T>(leaf: T): Bool {
+    // search all leaves
+    return Bool(false);
+  }
+  getRoot(): T {
+    this.rebuildTree();
+    return this.data[0];
+  }
 
-    constructor(data: Array<T>) {
-        this.data = data;
+  rebuildTree() {
+    if (this.refreshNeeded) {
+      // re calculate tree starting at leaves
     }
-
-    addLeaf<T>(leaf: T): T {
-        return leaf;
-    }
-
-    leafExists<T>(leaf: T): boolean {
-        // search all leaves 
-        return false;
-    }
-    getRoot() : T {
-        this.rebuildTree();
-        return this.data[0];
-    }
-
-    rebuildTree() {
-
-    }
+    this.refreshNeeded = false;
+  }
+  serialiseTree() {
+    JSON.stringify(this.data);
+  }
 }
 
 // type dataType {
